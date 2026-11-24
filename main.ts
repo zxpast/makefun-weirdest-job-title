@@ -35,7 +35,7 @@
 // near this title. Web exact-phrase search for the full title:
 // 0 verbatim hits.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
@@ -55,6 +55,22 @@ try {
 
 // Read the file back: the gate reads exactly these bytes, so a short or
 // mangled write must fail here rather than ship a broken entry.
+// Verification is done on the raw bytes, not just the decoded string:
+// the on-disk size must equal the entry's byte length plus one newline,
+// and the file must end with exactly one trailing newline (a second
+// newline, or a missing one, means the write was truncated or doubled).
+const EXPECTED_BYTES = Buffer.byteLength(LINE, 'utf8') + 1;
+let diskBytes: number;
+try {
+  diskBytes = statSync(DEST).size;
+} catch (err) {
+  console.error(`entry.txt could not be statted at ${DEST}: ${(err as Error).message}`);
+  process.exit(1);
+}
+if (diskBytes !== EXPECTED_BYTES) {
+  console.error(`entry.txt is ${diskBytes} bytes on disk, expected ${EXPECTED_BYTES}`);
+  process.exit(1);
+}
 let back: string;
 try {
   back = readFileSync(DEST, 'utf8');
@@ -66,10 +82,30 @@ if (back !== LINE + '\n') {
   console.error(`entry.txt read back does not match the entry line (got ${back.length} bytes)`);
   process.exit(1);
 }
+if (!back.endsWith('\n') || back.endsWith('\n\n')) {
+  console.error('entry.txt must end with exactly one trailing newline');
+  process.exit(1);
+}
 
-// Gate: 1-60 characters, one line, not only whitespace.
+// Gate: 1-60 characters, one line, not only whitespace. Tightened so a
+// sloppy title cannot slip through: no leading/trailing whitespace, no
+// consecutive whitespace (double spaces, tabs), and the first character
+// must be an uppercase letter — a job title that starts lowercase or
+// with a space is not a finished title.
 const body = LINE;
 if ([...body].length < 1 || [...body].length > 60 || body.trim().length === 0 || body.includes('\n')) {
   console.error(`entry fails gate: ${[...body].length} characters`);
+  process.exit(1);
+}
+if (body !== body.trim()) {
+  console.error('entry fails gate: leading or trailing whitespace');
+  process.exit(1);
+}
+if (/\s{2,}/.test(body)) {
+  console.error('entry fails gate: consecutive whitespace');
+  process.exit(1);
+}
+if (!/^[A-Z]/.test(body)) {
+  console.error('entry fails gate: must start with a capital letter');
   process.exit(1);
 }
